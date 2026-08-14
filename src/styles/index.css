@@ -1,0 +1,76 @@
+:root {
+  --sidebar-width: 210px;
+  --sidebar-collapsed-width: 64px;
+  --navbar-height: 50px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: #303133;
+  background-color: #f0f2f5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* 整体布局 */
+.app-wrapper {
+  display: flex;
+  height: 100%;
+}
+
+.app-sidebar {
+  width: var(--sidebar-width);
+  height: 100%;
+  transition: width 0.28s;
+  overflow: hidden;
+}
+
+.app-sidebar.is-collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.app-main-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+}
+
+.app-main {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+}
+
+/* 侧边栏 el-menu 暗色主题覆盖 */
+.app-sidebar .el-menu {
+  border-right: none;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
