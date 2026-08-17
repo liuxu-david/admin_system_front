@@ -18,7 +18,15 @@ const staticRoutes: RouteRecordRaw[] = [
     name: "Layout",
     component: () => import("@/components/layout/index.vue"),
     redirect: "/dashboard",
-    children: [],
+    children: [
+      {
+        // 首页是静态路由：所有登录用户都有、不受菜单权限控制（若依/大厂通行做法）
+        path: "dashboard",
+        name: "dashboard",
+        component: () => import("@/views/dashboard/index.vue"),
+        meta: { title: "首页", icon: "Odometer" },
+      },
+    ],
   },
   {
     path: "/:pathMatch(.*)*",

@@ -5,19 +5,22 @@ import {
   createMenu,
   deleteMenu,
   getMenuTree,
+  getPermissions,
   updateMenu,
 } from "@/api/rbac";
-import type { MenuTreeNode, MenuType, MenuStatus } from "@/types/rbac";
+import type { MenuTreeNode, MenuType, MenuStatus, Permission } from "@/types/rbac";
 
 const loading = ref(false);
 const treeData = ref<MenuTreeNode[]>([]);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const treeRef = ref<any>(null);
+// 权限码字典：下拉选择防止手滑写错码（后端保存时也会校验）
+const permissionOptions = ref<Permission[]>([]);
 
 async function load() {
   loading.value = true;
   try {
-    treeData.value = await getMenuTree();
+    const [tree, perms] = await Promise.all([getMenuTree(), getPermissions()]);
+    treeData.value = tree;
+    permissionOptions.value = perms;
   } finally {
     loading.value = false;
   }
@@ -148,52 +151,8 @@ async function remove(node: MenuTreeNode) {
   load();
 }
 
-// ─── 拖拽排序 ─────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isDescendant(maybeParent: any, node: any): boolean {
-  let p = node.parent;
-  while (p) {
-    if (p === maybeParent) return true;
-    p = p.parent;
-  }
-  return false;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function allowDrop(_draggingNode: any, dropNode: any, type: string): boolean {
-  // 不允许拖进自己的后代（避免环）
-  if (type === "inner") {
-    return !isDescendant(_draggingNode, dropNode);
-  }
-  return true;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function onDrop(draggingNode: any, dropNode: any, dropType: string) {
-  // 计算新父级 id
-  let newParentId: string | null;
-  if (dropType === "inner") {
-    newParentId = (dropNode.data as MenuTreeNode).id;
-  } else {
-    newParentId =
-      dropNode.parent && dropNode.parent.level > 0
-        ? (dropNode.parent.data as MenuTreeNode).id
-        : null;
-  }
-  // 新的兄弟节点顺序（el-tree 已更新 draggingNode.parent.childNodes）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const siblings: MenuTreeNode[] = draggingNode.parent?.childNodes?.map((n: any) => n.data) ?? [];
-  // 回写 sort + 受影响节点的 parentId
-  await Promise.all(
-    siblings.map((s, idx) => {
-      const patch: { sort: number; parentId?: string | null } = { sort: idx };
-      if ((s.parentId ?? null) !== (newParentId ?? null)) patch.parentId = newParentId;
-      return updateMenu(s.id, patch);
-    }),
-  );
-  ElMessage.success("已调整顺序");
-  load();
-}
+// ─── 拖拽排序已移除：交互层不可靠且难以验证 ──
+// 排序方式：编辑弹窗里的「排序」数字，越小越靠前（同层级内比较）
 
 onMounted(load);
 </script>
@@ -203,7 +162,12 @@ onMounted(load);
     <el-card shadow="never">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center">
-          <span>菜单管理（可拖拽排序）</span>
+          <div>
+            <span>菜单管理</span>
+            <span style="color: #909399; font-size: 12px; margin-left: 8px">
+              排序：在「编辑」里调数字，同层级内越小越靠前
+            </span>
+          </div>
           <el-button v-permission="'menu:create'" type="primary" @click="openCreate()">
             新建顶级菜单
           </el-button>
@@ -211,15 +175,11 @@ onMounted(load);
       </template>
 
       <el-tree
-        ref="treeRef"
         v-loading="loading"
         :data="treeData"
         node-key="id"
-        draggable
         :expand-on-click-node="false"
         default-expand-all
-        :allow-drop="allowDrop"
-        @node-drop="onDrop"
       >
         <template #default="{ data }">
           <div class="menu-node">
@@ -288,8 +248,23 @@ onMounted(load);
         <el-form-item v-if="form.type !== 'button'" label="图标">
           <el-input v-model="form.icon" placeholder="如 Setting（Element Plus 图标名）" />
         </el-form-item>
-        <el-form-item v-if="form.type === 'button'" label="权限码">
-          <el-input v-model="form.permission" placeholder="如 user:delete" />
+        <el-form-item v-if="form.type !== 'directory'" label="权限码">
+          <el-select
+            v-model="form.permission"
+            filterable
+            allow-create
+            clearable
+            :placeholder="form.type === 'button' ? '操作权限，如 user:delete' : '页面访问权限，如 user:read'"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="p in permissionOptions"
+              :key="p.id"
+              :label="`${p.name}（${p.code}）`"
+              :value="p.code"
+            />
+          </el-select>
+          <div class="form-tip">勾选此节点的角色将获得该权限；menu 节点挂查询权限，button 节点挂操作权限</div>
         </el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sort" :min="0" /></el-form-item>
         <el-form-item label="是否可见">
@@ -335,6 +310,12 @@ onMounted(load);
 .menu-node-title .perm {
   color: #e6a23c;
   font-size: 12px;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+  margin-top: 4px;
 }
 .menu-node-actions {
   display: none;

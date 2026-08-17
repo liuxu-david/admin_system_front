@@ -2,6 +2,7 @@
 import { useAppStore } from "@/stores/app";
 import Sidebar from "./Sidebar.vue";
 import Navbar from "./Navbar.vue";
+import TabsView from "./TabsView.vue";
 import AppMain from "./AppMain.vue";
 
 const appStore = useAppStore();
@@ -14,6 +15,7 @@ const appStore = useAppStore();
     </div>
     <div class="app-main-container">
       <Navbar />
+      <TabsView />
       <AppMain />
     </div>
   </div>

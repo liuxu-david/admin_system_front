@@ -1,0 +1,27 @@
+# 前端部署编排（web 单服务）。
+# 后端是独立项目/独立仓库，有自己的 compose（app+postgres+redis），
+# 本容器通过 nginx 把 /api 反代到后端服务地址（BACKEND_HOST）。
+#
+# 服务器上：每个环境一个目录（如 /opt/admin-frontend-test），放本文件 + .env。
+# 镜像 tag 由 CI 部署时注入 IMAGE。
+
+services:
+  web:
+    image: ${IMAGE:-frontend:latest}
+    container_name: admin-web
+    restart: unless-stopped
+    environment:
+      # 后端地址：默认 host.docker.internal（= 宿主机，配合下面的 host-gateway 映射），
+      # 后端部署在别的机器就改成那台的内网 IP
+      - BACKEND_HOST=${BACKEND_HOST:-host.docker.internal}
+    extra_hosts:
+      # Linux 上把 host.docker.internal 指到宿主机（Docker Desktop 自带，Linux 需要）
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${WEB_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

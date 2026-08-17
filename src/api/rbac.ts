@@ -10,7 +10,7 @@ import type {
   MenuStatus,
 } from "@/types/rbac";
 
-// ─── 权限 ──────────────────────────────────────────
+// ─── 权限（权限码字典，菜单表单下拉用） ──────────────
 export const getPermissions = () => request.get<Permission[]>("/rbac/permissions");
 
 // ─── 角色 ──────────────────────────────────────────
@@ -27,8 +27,7 @@ export const updateRole = (
   data: { name?: string; description?: string; sort?: number },
 ) => request.patch<Role>(`/rbac/roles/${id}`, data);
 export const deleteRole = (id: string) => request.delete<null>(`/rbac/roles/${id}`);
-export const assignRolePermissions = (id: string, ids: string[]) =>
-  request.put<null>(`/rbac/roles/${id}/permissions`, { ids });
+// 权限随勾选的菜单节点派生，只分配菜单即可
 export const assignRoleMenus = (id: string, ids: string[]) =>
   request.put<null>(`/rbac/roles/${id}/menus`, { ids });
 
@@ -54,6 +53,14 @@ export const updateMenu = (id: string, data: Partial<Menu>) =>
 export const deleteMenu = (id: string) => request.delete<null>(`/rbac/menus/${id}`);
 
 // ─── 用户（管理端） ────────────────────────────────
+// CRUD 走 /users（UserController），列表走 /rbac/users（带角色）
+export const createUser = (data: { email: string; nickname?: string; password: string }) =>
+  request.post<UserWithRoles>("/users", data);
+export const updateUser = (
+  id: string,
+  data: { email?: string; nickname?: string; password?: string },
+) => request.patch<UserWithRoles>(`/users/${id}`, data);
+export const deleteUser = (id: string) => request.delete<null>(`/users/${id}`);
 export const getUsers = () => request.get<UserWithRoles[]>("/rbac/users");
 export const assignUserRoles = (id: string, ids: string[]) =>
   request.put<null>(`/rbac/users/${id}/roles`, { ids });

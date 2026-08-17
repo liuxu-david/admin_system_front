@@ -3,40 +3,21 @@ import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   assignRoleMenus,
-  assignRolePermissions,
   createRole,
   deleteRole,
   getMenuTree,
-  getPermissions,
   getRoleDetail,
   getRoles,
   updateRole,
 } from "@/api/rbac";
-import type { MenuTreeNode, Permission, Role } from "@/types/rbac";
+import type { MenuTreeNode, Role } from "@/types/rbac";
 
 const loading = ref(false);
 const list = ref<Role[]>([]);
-const allPermissions = ref<Permission[]>([]);
 const allMenuTree = ref<MenuTreeNode[]>([]);
-const permIdSet = computed(() => new Set(allPermissions.value.map((p) => p.id)));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const permTreeRef = ref<any>(null);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const menuTreeRef = ref<any>(null);
-
-const permissionTreeData = computed(() => {
-  const groups = new Map<string, Permission[]>();
-  for (const p of allPermissions.value) {
-    if (!groups.has(p.module)) groups.set(p.module, []);
-    groups.get(p.module)!.push(p);
-  }
-  return [...groups.entries()].map(([module, perms]) => ({
-    id: `module:${module}`,
-    label: module,
-    children: perms.map((p) => ({ id: p.id, label: `${p.name} (${p.code})` })),
-  }));
-});
 
 interface TreeNode {
   id: string;
@@ -46,7 +27,8 @@ interface TreeNode {
 function toMenuNodes(nodes: MenuTreeNode[]): TreeNode[] {
   return nodes.map<TreeNode>((n) => ({
     id: n.id,
-    label: `${n.name}${n.type === "button" ? ` [按钮:${n.permission}]` : ""}`,
+    // 方括号里是该节点授予的权限码：勾了节点 = 拥有该权限
+    label: `${n.name}${n.permission ? ` [${n.permission}]` : ""}`,
     children: n.children?.length ? toMenuNodes(n.children) : undefined,
   }));
 }
@@ -55,13 +37,8 @@ const menuTreeData = computed(() => toMenuNodes(allMenuTree.value));
 async function load() {
   loading.value = true;
   try {
-    const [roles, perms, menus] = await Promise.all([
-      getRoles(),
-      getPermissions(),
-      getMenuTree(),
-    ]);
+    const [roles, menus] = await Promise.all([getRoles(), getMenuTree()]);
     list.value = roles;
-    allPermissions.value = perms;
     allMenuTree.value = menus;
   } finally {
     loading.value = false;
@@ -115,36 +92,47 @@ async function remove(role: Role) {
   load();
 }
 
-// ─── 分配权限/菜单 ────────────────────────────────
+// ─── 分配菜单权限（单一入口：勾了节点即授予其权限码）───
 const assignDialogVisible = ref(false);
 const currentRole = ref<Role | null>(null);
-const activeTab = ref("permission");
+
+/** childId → parentId 映射：提交时自动补全父级目录，保证菜单树不断裂 */
+const parentMap = computed(() => {
+  const map = new Map<string, string>();
+  const walk = (nodes: MenuTreeNode[], parent: string | null) => {
+    for (const n of nodes) {
+      if (parent) map.set(n.id, parent);
+      if (n.children?.length) walk(n.children, n.id);
+    }
+  };
+  walk(allMenuTree.value, null);
+  return map;
+});
 
 async function openAssign(role: Role) {
   currentRole.value = role;
-  activeTab.value = "permission";
   const detail = await getRoleDetail(role.id);
   assignDialogVisible.value = true;
   await nextTick();
-  permTreeRef.value?.setCheckedKeys(detail.permissions.map((p) => p.id));
+  // check-strictly 下父子解耦：setCheckedKeys 精确回显，不会级联勾上子孙
   menuTreeRef.value?.setCheckedKeys(detail.menus.map((m) => m.id));
 }
 
 async function submitAssign() {
   if (!currentRole.value) return;
 
-  // 权限：checked ∪ half-checked，过滤掉虚拟的 module 分组节点
-  const permChecked = permTreeRef.value!.getCheckedKeys() as string[];
-  const permHalf = permTreeRef.value!.getHalfCheckedKeys() as string[];
-  const permIds = [...permChecked, ...permHalf].filter((id) => permIdSet.value.has(id));
+  // check-strictly 下父子解耦：只取勾选项，再沿树向上补全父级目录（防侧边栏树断裂）
+  const checked = menuTreeRef.value!.getCheckedKeys() as string[];
+  const ids = new Set<string>(checked);
+  for (const id of checked) {
+    let p = parentMap.value.get(id);
+    while (p && !ids.has(p)) {
+      ids.add(p);
+      p = parentMap.value.get(p);
+    }
+  }
 
-  // 菜单：checked ∪ half-checked（保留父级目录，避免树断裂）
-  const menuChecked = menuTreeRef.value!.getCheckedKeys() as string[];
-  const menuHalf = menuTreeRef.value!.getHalfCheckedKeys() as string[];
-  const menuIds = [...menuChecked, ...menuHalf];
-
-  await assignRolePermissions(currentRole.value.id, permIds);
-  await assignRoleMenus(currentRole.value.id, menuIds);
+  await assignRoleMenus(currentRole.value.id, [...ids]);
   ElMessage.success("权限已更新");
   assignDialogVisible.value = false;
   load();
@@ -219,34 +207,28 @@ onMounted(load);
       </template>
     </el-dialog>
 
-    <!-- 分配权限/菜单 -->
+    <!-- 分配菜单权限：勾了菜单/按钮节点 = 授予其挂的权限码 -->
     <el-dialog
       v-model="assignDialogVisible"
       :title="`分配权限 - ${currentRole?.name ?? ''}`"
       width="560px"
     >
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="接口权限" name="permission">
-          <el-tree
-            ref="permTreeRef"
-            :data="permissionTreeData"
-            show-checkbox
-            node-key="id"
-            :props="{ label: 'label', children: 'children' }"
-            default-expand-all
-          />
-        </el-tab-pane>
-        <el-tab-pane label="菜单" name="menu">
-          <el-tree
-            ref="menuTreeRef"
-            :data="menuTreeData"
-            show-checkbox
-            node-key="id"
-            :props="{ label: 'label', children: 'children' }"
-            default-expand-all
-          />
-        </el-tab-pane>
-      </el-tabs>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="勾选页面 = 可访问该页面；勾选按钮 = 可执行对应操作（方括号内为权限码）。父级勾选不会自动选中子级，保存时会自动带上父级目录。"
+        style="margin-bottom: 12px"
+      />
+      <el-tree
+        ref="menuTreeRef"
+        :data="menuTreeData"
+        show-checkbox
+        check-strictly
+        node-key="id"
+        :props="{ label: 'label', children: 'children' }"
+        default-expand-all
+      />
       <template #footer>
         <el-button @click="assignDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="submitAssign">保存</el-button>

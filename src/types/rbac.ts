@@ -47,8 +47,8 @@ export interface Role {
 }
 
 /** 角色详情：带已分配的 permissions / menus（供分配弹窗回显） */
+/** 角色详情：带已勾选的 menus（权限码从菜单节点派生，无独立权限关联） */
 export interface RoleDetail extends Role {
-  permissions: Permission[];
   menus: Menu[];
 }
 
