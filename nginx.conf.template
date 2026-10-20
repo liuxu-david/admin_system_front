@@ -1,7 +1,7 @@
 # nginx 配置模板：构建进镜像 /etc/nginx/templates/，官方 nginx 镜像启动时
 # 用 envsubst 把 ${BACKEND_HOST} 替换成容器环境变量（只替换已定义的变量，
 # $host 等 nginx 内置变量不受影响）。
-# BACKEND_HOST 由部署时的 docker-compose 传入（默认 host.docker.internal = 宿主机）。
+# BACKEND_HOST 由统一测试编排传入 app，使用同一网络中的后端服务名。
 
 server {
     listen 80;

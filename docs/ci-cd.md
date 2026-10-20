@@ -1,82 +1,99 @@
-# 前端 CI/CD 与部署手册（运维小白版·前端）
+# 前端 CI/CD：GitHub Actions 构建，Nginx 运行
 
-> 目标：照着做，做完「推代码到 GitLab → 服务器前端自动更新」打通。
-> **前置**：GitLab / Runner / Registry / 装好 Docker 的服务器——这些公共设施**一次搭好两个项目共用**，还没搭过先做【后端仓库 `docs/ci-cd.md` 第 1、2 节】（含完整命令和验证方法），再回来做本篇。
+> 本地实现不等于云端已启用；当前工作分支 `chore/github-actions-test` 待用户审核、提交、推送和 PR 到 main。
+> 完整亲手部署教程：[后端 deploy/README.md](https://github.com/liuxu-david/admin_system_backstage/blob/main/deploy/README.md)（合入后在线可读）。
+> 并列本地工作区可读 [后端手册](../../admin_system_backstage/deploy/README.md) 或 [根 DEPLOY.md](../../DEPLOY.md)；父目录不是 Git 仓库。
 
-## 0. 先理解：前端部署后长什么样
+## 1. 文件和触发规则
 
-前端打包产物是一堆静态文件（HTML/JS/CSS），部署 = 放进一个 **nginx 容器**里对外服务：
+工作流：[`.github/workflows/ci-cd.yml`](../.github/workflows/ci-cd.yml)。origin 为 `liuxu-david/admin_system_front`。两仓分别运行，不是在父目录建一条工作流。
 
-```
-浏览器 ──▶ 前端容器(nginx:80)
-             ├─ /            → 返回静态文件（Vue 打包产物）
-             └─ /api/xxx     → 反向代理转发给后端容器:3000 ──▶ PG / Redis
-```
-
-- 因为 `/api` 是 nginx 转发的，前端和后端**同源**，没有跨域问题。
-- 镜像分两种模式构建：`MODE=test`（读 `.env.test`）/ `MODE=staging`（读 `.env.staging`）——目前两者内容相同，留作以后区分。
-- **nginx 的 SPA 规则已配好**（刷新不会 404），不用管。
-
-## 1. GitLab 建项目并推代码（一次性）
-
-```bash
-# GitLab 上（后端同款步骤）建空项目 admin-front，然后在你电脑：
-git remote add gitlab http://gitlab.你的IP/admin/admin-front.git
-git push gitlab main
-git push gitlab develop
-```
-
-## 2. 配 CI 变量（一次性）
-
-GitLab 项目 → Settings → CI/CD → Variables（和后端的变量**各自项目各配一套**）：
-
-| 变量名 | 值 | 说明 |
-|---|---|---|
-| TEST_SSH_HOST | 服务器IP | 和后端同一台即可 |
-| TEST_SSH_USER | root | |
-| TEST_SSH_KEY | 部署私钥**全部内容** | 和后端用的是同一对密钥，公钥已在服务器上 |
-| TEST_DEPLOY_DIR | /opt/admin-frontend-test | 前端自己的目录，别和后端混 |
-
-## 3. 服务器准备部署目录（每环境一次）
-
-```bash
-mkdir -p /opt/admin-frontend-test && cd /opt/admin-frontend-test
-cat > .env <<'EOF'
-WEB_PORT=80
-# 后端地址：默认 host.docker.internal = "宿主机"（容器访问宿主机端口的固定写法）
-# 后端部署在另一台机器时，改成那台的内网 IP
-BACKEND_HOST=host.docker.internal
-EOF
-```
-> 前提：后端已先部署好且 `curl http://127.0.0.1:3000/health` 通（后端默认只绑宿主机回环，同机正好够用）。
-
-## 4. 第一次部署
-
-```bash
-git checkout develop && git push gitlab develop
-```
-→ GitLab 项目 → Build → Pipelines：check → package → deploy:test 全绿。
-✅ 验证（服务器上）：
-```bash
-curl http://127.0.0.1/          # 返回 HTML（<!DOCTYPE html>...）
-curl http://127.0.0.1/health    # {"code":0,...}（说明 nginx→后端的反代链路也通了）
-```
-浏览器打开 `http://服务器IP/` 能看到登录页 → 用 admin 登录走一遍。
-
-## 5. 日常怎么用
-
-| 想干什么 | 怎么做 |
+| 事件／开关 | 行为 |
 |---|---|
-| 日常开发 | feature 分支 → MR → 合入 `develop` → 自动部署测试 |
-| 上预发 | `develop` 合入 `main` → 流水线手动按钮 ▶ `deploy:staging`（自动用 staging 模式构建） |
-| 改了 .env.test 里的变量 | 必须重新走构建部署才生效（`VITE_` 变量是**打包时**写死进 JS 的） |
-| 看前端容器日志 | `docker logs admin-web --tail 50` |
+| PR 到 main | 检查、Docker 构建与隔离 Nginx smoke；不推 GHCR、不部署 |
+| push main | 检查后推镜像，默认不部署 |
+| workflow_dispatch | 选择 main，勾选 `deploy=true` 才部署 |
+| 仓库 Actions variable `AUTO_DEPLOY_TEST=true` | 开启 main push 自动部署；首次 bootstrap 前不要开启 |
 
-## 6. 常见问题
+部署 job 用 Environment `test`、只允许 main、权限仅 `contents:read`。镜像发布用 `GITHUB_TOKEN`＋`packages:write`，不使用服务器拉包 PAT。
 
-| 现象 | 原因 / 处理 |
+## 2. 检查与构建
+
+标准 `ubuntu-24.04` Runner，Node `24.19.0`、pnpm `11.20.0`，官方 registry 冻结安装。当前前端没有独立 lint／单元 test 脚本，不虚构其覆盖。
+
+```bash
+pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+pnpm type-check
+pnpm exec vite build --mode test
+pnpm audit --prod --audit-level=high --registry=https://registry.npmjs.org
+python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+```
+
+Docker 明确 `MODE=test`，类型检查不能省略。隔离 smoke 检查静态页面、SPA 回退和 Nginx 代理路由；不是完整真实后端端到端测试。只有 smoke 通过的同一镜像会推 GHCR，不二次构建替换。
+
+镜像标签 `ghcr.io/liuxu-david/admin_system_front:sha-完整提交SHA` 供追踪；运行 Summary **Frontend test image** 输出 `ghcr.io/liuxu-david/admin_system_front@sha256:64位小写十六进制`。部署只接受此完整 digest，不能用 tag／latest、不能粘贴后端镜像。
+
+仅构建 `linux/amd64`，服务器须 x86_64，不自动支持 ARM。服务器不用 Node、pnpm、PM2 或 `pnpm dev`／vite preview，只运行前端 Nginx 镜像。
+
+`VITE_API_BASE_URL=/api` 是同源路径；`VITE_` 值会进入浏览器静态文件，不能放秘密，修改须重新构建。
+
+## 3. 统一服务器约定
+
+唯一新测试配置来源是**后端** `deploy/compose.yml`、`.env.example`、`manage.py`。用户 SFTP 上传到固定 `/opt/admin-system-test/`；CI 不覆盖服务器文件，不能用 DEPLOY_DIR 改路径。
+
+四服务 `web`、`app`、`postgres`、`redis` 同一网络。`BACKEND_HOST=app`，Nginx 访问 `app:3000` 保留 `/api` 前缀；仅宿主 `127.0.0.1:8080:80`，数据库／后端不暴露公网。
+
+首选本地 SSH 隧道 `127.0.0.1:18080 → 服务器127.0.0.1:8080`，浏览器用 `http://127.0.0.1:18080`，不需要域名。CORS 默认同一地址，不能换成公网明文登录。
+
+服务器 `.env` 保留强随机秘密，`images.env` 由工具单独保存前后端版本；不要 source／eval。`APP_ENV=test` 仍走后端 migration，不自动 seed。首次需两仓 main 镜像，再人工 bootstrap、交互 seed、隧道登录和改密码，之后才开 CD。
+
+私有 GHCR：对两包均有读取权限的账号，PAT classic `read:packages`，部署用户用 `docker login --password-stdin`；与 SSH 的 DEPLOY_USER 必须同一账号。代码公开不代表包公开。
+
+## 4. 发布和回滚
+
+服务器以同一部署用户执行，先输入本仓库成功 Summary 的完整 digest：
+
+```bash
+read -r -p "前端完整 digest: " IMAGE
+python3 /opt/admin-system-test/manage.py deploy frontend "$IMAGE"
+python3 /opt/admin-system-test/manage.py status
+python3 /opt/admin-system-test/manage.py check
+```
+
+deploy／rollback 需已有成功 bootstrap。前端发布仅更新 FRONTEND_IMAGE 与 web，不覆盖后端版本或 `.env` 秘密。后端更新会重建 web 以重新解析后端 IP。
+
+两仓共用服务器级 fcntl 锁，冲突直接拒绝，不是跨仓库排队；等前一操作结束且状态确认后重试。不要用手工 Compose 绕过锁，仓库内 concurrency 不能代替它。
+
+```bash
+python3 /opt/admin-system-test/manage.py rollback frontend
+python3 /opt/admin-system-test/manage.py check
+```
+
+回退选成功历史中的不同旧版本；无记录则拒绝。检查失败不等于已自动恢复旧容器，`images.env` 只记录期望，须结合实际状态。后端回滚还需结构兼容确认且不恢复数据库，不由前端工作流处理。
+
+## 5. GitHub test 环境和 SSH
+
+两仓各建 Environment **test**，分支仅 main；可用时设置审批。环境 Variables：`DEPLOY_HOST`（私网IPv4／DNS）、`DEPLOY_PORT`、`DEPLOY_USER`、`USE_TAILSCALE`、`TAILSCALE_TAGS=tag:ci`；Secrets：`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`。
+
+只有 `USE_TAILSCALE=true` 启用官方 v4.2.0 OAuth Action，再需 Secrets `TS_OAUTH_CLIENT_ID`、`TS_OAUTH_SECRET`。服务器正常账号接入；OAuth scope 为 **auth_keys Write**，tag须拥有或匹配tag:ci。ACL仅放CI到服务器SSH，不覆盖现有整份ACL；不需`id-token:write`。见[官方要求](https://github.com/tailscale/github-action/blob/v4.2.0/README.md)。
+
+Tailscale只提供网络，不代替普通SSH公钥与known_hosts。ssh-keyscan采集后必须通过云控制台比对指纹；不禁用主机校验。不用Tailscale则自行提供安全可达通道，不把SSH对0.0.0.0/0开放来凑通路。
+
+`AUTO_DEPLOY_TEST` 是**仓库级变量**。手动 Run workflow 选择main＋deploy后验收，才考虑设true。地址／key等放test环境，不把数据库秘密上传Actions。
+
+## 6. 验收、排错和旧配置
+
+首页和`/health`通过不代表账号／权限都正常；必须隧道登录、菜单与业务查询、刷新内部页面。查看日志可用服务器 `docker logs --tail=100 admin-system-test-web-1`，默认手工Compose不会读images.env。
+
+| 现象 | 优先检查 |
 |---|---|
-| 页面能开但登录报错/接口 404 | nginx→后端不通：检查后端起没起、`.env` 的 BACKEND_HOST 对不对 |
-| /api 返回 502 Bad Gateway | 同上，nginx 找不到后端；后端在另一台机就把 BACKEND_HOST 改成那台内网 IP 后 `docker compose -f docker-compose.deploy.yml up -d` |
-| 改了环境变量没生效 | `VITE_` 是构建期变量，重启容器没用，要重新触发流水线构建 |
-| 刷新页面 404 | 用了旧镜像（没带 SPA 规则），确认流水线重新构建部署过 |
+| main没自动部署 | 默认行为；AUTO_DEPLOY_TEST是否为仓库变量，或是否手动勾deploy |
+| 页面可开但502 | app是否健康，迁移、共享网络、Nginx旧IP；用管理工具发布 |
+| 刷新404 | 当前镜像SPA回退；确认部署的是本次digest |
+| 改VITE无效果 | 是否重建；重启Nginx不能改静态产物 |
+| 拉包失败 | 部署用户、只读PAT、两包Read权限、SSO、名称与digest |
+| SSH失败 | 先核对网络／tag／ACL、公钥／主机指纹，不关闭安全校验 |
+
+旧 `.gitlab-ci.yml`、`docker-compose.deploy.yml` 与 `deploy/Caddyfile` 已删除。约1280MiB容器上限不是2GB容量保证，发布可短暂中断；备份需异地与恢复演练。
+
+双方类型／build与前端audit已通过（前端0漏洞、后端仍3 moderate但high门槛通过）；actionlint／Compose静态检查通过，客户端mock测试后端9／前端8通过。独立PG／Redis＋宿主Node的真实后端链路通过，非新镜像验证。双端Docker构建在Docker Hub认证网络超时，镜像smoke及GitHub／GHCR／真实服务器发布未实跑；账户额度和网络也须自行确认，不承诺免费。

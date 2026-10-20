@@ -1,8 +1,17 @@
 node_modules
 dist
+.env
 .env.local
 .env.*.local
 *.log
+*.pem
+*.key
 .git
 .vscode
 .idea
+.zcode
+deploy
+.github
+docs
+__pycache__
+*.pyc
